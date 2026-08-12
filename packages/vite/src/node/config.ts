@@ -89,6 +89,7 @@ import {
   createDebugger,
   createFilter,
   deepClone,
+  getFileStartIndex,
   hasBothRollupOptionsAndRolldownOptions,
   isExternalUrl,
   isFilePathESM,
@@ -97,6 +98,7 @@ import {
   isNodeLikeBuiltin,
   isObject,
   isParentDirectory,
+  lineTerminatorRE,
   mergeAlias,
   mergeConfig,
   mergeWithDefaults,
@@ -923,27 +925,21 @@ const configDefaults = Object.freeze({
   appType: 'spa',
 } satisfies UserConfig)
 
-function resolveInput(
+function normalizeInput(
   input: InputOption | undefined,
-  root: string,
 ): InputOption | undefined {
   if (input === undefined) {
     return undefined
   }
   if (typeof input === 'string') {
-    const unescapedInput = unescapeGlobCharacters(input)
-    return normalizePath(path.resolve(root, unescapedInput))
+    return unescapeGlobCharacters(input)
   }
   if (Array.isArray(input)) {
-    return input.map((inp) => {
-      const unescapedInput = unescapeGlobCharacters(inp)
-      return normalizePath(path.resolve(root, unescapedInput))
-    })
+    return input.map(unescapeGlobCharacters)
   }
   const resolved: Record<string, string> = {}
   for (const key in input) {
-    const unescapedInput = unescapeGlobCharacters(input[key])
-    resolved[key] = normalizePath(path.resolve(root, unescapedInput))
+    resolved[key] = unescapeGlobCharacters(input[key])
   }
   return resolved
 }
@@ -996,7 +992,6 @@ function resolveEnvironmentOptions(
   options: EnvironmentOptions,
   alias: Alias[],
   preserveSymlinks: boolean,
-  root: string,
   forceOptimizeDeps: boolean | undefined,
   logger: Logger,
   environmentName: string,
@@ -1044,7 +1039,7 @@ function resolveEnvironmentOptions(
     isSsrTargetWebworkerEnvironment,
   )
   return {
-    input: resolveInput(options.input, root),
+    input: normalizeInput(options.input),
     define: options.define,
     resolve,
     keepProcessEnv:
@@ -1727,7 +1722,6 @@ export async function resolveConfig(
       config.environments[environmentName],
       resolvedDefaultResolve.alias,
       resolvedDefaultResolve.preserveSymlinks,
-      resolvedRoot,
       inlineConfig.forceOptimizeDeps,
       logger,
       environmentName,
@@ -1865,13 +1859,8 @@ export async function resolveConfig(
         )
       : ''
 
-  const input = resolveInput(config.input, resolvedRoot)
-  const server = await resolveServerOptions(
-    resolvedRoot,
-    config.server,
-    input,
-    logger,
-  )
+  const input = normalizeInput(config.input)
+  const server = await resolveServerOptions(resolvedRoot, config.server, logger)
 
   const builder = resolveBuilderOptions(config.builder)
 
@@ -2640,13 +2629,13 @@ async function bundleConfigFile(
 
             let injectedContents: string
             if (code.startsWith('#!')) {
-              // hashbang
-              let firstLineEndIndex = code.indexOf('\n')
-              if (firstLineEndIndex < 0) firstLineEndIndex = code.length
+              const fileStartIndex = getFileStartIndex(code)
+              const hashbang = code.slice(0, fileStartIndex)
               injectedContents =
-                code.slice(0, firstLineEndIndex + 1) +
+                hashbang +
+                (lineTerminatorRE.test(hashbang) ? '' : '\n') +
                 injectValues +
-                code.slice(firstLineEndIndex + 1)
+                code.slice(fileStartIndex)
             } else {
               injectedContents = injectValues + code
             }
